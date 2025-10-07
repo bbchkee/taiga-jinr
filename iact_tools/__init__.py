@@ -27,3 +27,7 @@ __all__ = [
     "GammaShowerRegressor",
     "calc_seconds",
 ]
+
+from .effective_area import compute_effective_area, compute_effective_area_from_files, write_effective_area_products
+
+from .unfolding import build_response_matrix, tikhonov_unfold, unfold_to_flux, run_unfolding_pipeline
