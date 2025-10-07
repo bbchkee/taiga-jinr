@@ -1,34 +1,30 @@
+
 # iact-tools
 
-A set of utilities for analyzing TAIGA-IACT (Cherenkov) data.
-Includes data loading, energy reconstruction, basic cuts, spectrum building, and theta^2 distributions.
+Набор утилит для анализа данных TAIGA-IACT (Cherenkov). Включает загрузку,
+реконструкцию энергии, базовые каты, построение спектров и распределения `theta^2`.
+Для корректной работы необходим python 3.9 или выше.
 
-## Structure
+## Структура
+- `iact_tools/` — код пакета
+  - `data_loading.py` — загрузка CSV и быстрые гистограммы
+  - `models.py` — мат. модели и `theta^2`
+  - `reconstruction.py` — реконструкция энергии и каты
+  - `analysis.py` — графики спектров и `theta^2`
+  - `regressor.py` — Torch-регрессор энергии
+  - `utils.py` — вспомогательное
+- `scripts/run_pipeline.py` — CLI-скрипт
+- `docs/` — документация
+- `tests/` — место под тесты
 
-- `iact_tools/` - package code
-  -  `data_loading.py` - CSV loading and quick histograms
-  -  `models.py` - mathematical models and theta^2
-  -  `reconstruction.py` - energy reconstruction and cuts
-  -  `analysis.py` - spectrum and theta^2 plots
-  -  `regressor.py` - Torch-based energy regressor
-  -  `utils.py` - helpers
-  -  `scripts/run_pipeline.py` - CLI script
-  -  `docs/` - documentation
-  -  `tests/` - tests
-
-## Quick start
-
+## Быстрый старт
 ```bash
 python -m venv .venv && source .venv/bin/activate
 pip install -r requirements.txt
-python scripts/run_pipeline.py --model-path /path/to/model_csv --exp-path /path/to/exp_csv
-# или через entrypoint после установки:
-# pip install .
-# iact-run --model-path ... --exp-path ...
+python3 -m scripts.run_pipeline   --model-path /model/csv/folder   --exp-path exp/csv/folder --exp-pattern "*.csv" --sums edist/file/path  --throw-radius 1000 --eff-bins 20  --unfold --tau-auto
+
 ```
 
-Output plots are stored in plots/, tables in outputs/.
 
-## License
+## Лицензия
 GNU GPL v3
-

@@ -14,6 +14,23 @@ class GammaSpectrumReconstructor:
         self.energy_fit_params = {}
         self.cuts = None
 
+# FILTERS & QUALITY CUTS ============================================================
+
+    def apply_good_cut(self, df: pd.DataFrame) -> pd.DataFrame:
+        ''' Кат на хорошесть данных (шумы, темпы счета, погода) 
+        '''
+        df = df.copy()
+        mask = (
+            (df['tracking'] == 1) &
+            (df['good'] == 1) &
+            (df['edge'] == 0) &
+            (df['tel_el'] < 60) &
+            (df['tel_el'] > 50) &
+            (df['weather_mark'] > 5) &
+            (df['star'] == 0) 
+        )
+        return df[mask]
+
     @staticmethod
     def filter_model_data(df: pd.DataFrame) -> pd.DataFrame:
         df = df.copy()
@@ -27,6 +44,9 @@ class GammaSpectrumReconstructor:
         return df[mask]
 
     def add_background_alphas_dists_thetas(self, df: pd.DataFrame) -> pd.DataFrame:
+    # TODO добавить расчет для модельных данных;
+    # откуда брать x,y ?
+
         df = df.copy()
         r = np.sqrt(df['source_x']**2 + df['source_y']**2)
         angle0 = np.arctan2(df['source_y'], df['source_x'])
@@ -64,6 +84,8 @@ class GammaSpectrumReconstructor:
         return df
 
     def filter_experiment_data(self, df: pd.DataFrame) -> pd.DataFrame:
+        # TODO загрузку катов с json
+        # и вообще эту канитель надо переделать и слить с classity_by_cuts
         df = df.copy()
         df['gamma_like_1'] = (
             (df['size'] > 120) &
@@ -85,6 +107,8 @@ class GammaSpectrumReconstructor:
 
     @staticmethod
     def compute_dynamic_cuts(model_data: pd.DataFrame, exp_data: pd.DataFrame) -> dict:
+        # TODO квантили аргументами
+        # отрисовку гистограмм параметров для модельных и экспериментальных, для дебага
         gamma_width = model_data['width[0]']
         gamma_length = model_data['length[0]']
         bg_width = exp_data['width']
@@ -99,8 +123,43 @@ class GammaSpectrumReconstructor:
     def tune_cuts(self, exp_data: pd.DataFrame):
         self.cuts = self.compute_dynamic_cuts(self.model_data, exp_data)
 
+# RECO  ============================================================
+
+    def reconstruct_energy(self, exp_data: pd.DataFrame) -> pd.DataFrame:
+        if not self.energy_fit_params:
+            raise ValueError("Call fit_energy_size() before reconstruct_energy().")
+        df = exp_data.copy()
+        energies = []
+        for _, row in df.iterrows():
+            E = np.nan
+            for (low, high), p in self.energy_fit_params.items():
+                if low <= row.get('dist1', np.nan) < high:
+                    E = 10 ** (linear_model(np.log10(row['size']), *p))
+                    break
+            energies.append(E)
+        df['reconstructed_energy'] = energies
+        return df
+
+    def reconstruct_energy_for_model_data(self, df_model: pd.DataFrame) -> pd.DataFrame:
+        if not self.energy_fit_params:
+            raise ValueError("Call fit_energy_size() before reconstruct_energy_for_model_data().")
+        df = df_model.copy()
+        energies = []
+        for _, row in df.iterrows():
+            E = np.nan
+            for (low, high), p in self.energy_fit_params.items():
+                if low <= row.get('dist[0]', np.nan) < high:
+                    E = 10 ** (linear_model(np.log10(row['size']), *p))
+                    break
+            energies.append(E)
+        df['reconstructed_energy'] = energies
+        return df
+
+
+# CLASSIFIERS ============================================================
+
     @staticmethod
-    def train_gamma_classifier(model_df: pd.DataFrame, exp_df: pd.DataFrame):
+    def train_rf_classifier(model_df: pd.DataFrame, exp_df: pd.DataFrame):
         from sklearn.ensemble import RandomForestClassifier
         from sklearn.utils import shuffle
         model_df = model_df.rename(columns={'dist[0]': 'dist', 'width[0]': 'width', 'length[0]': 'length'})
@@ -117,26 +176,23 @@ class GammaSpectrumReconstructor:
         clf = RandomForestClassifier(n_estimators=100, max_depth=10, class_weight='balanced', random_state=42)
         clf.fit(X, y)
         return clf
-
-    @staticmethod
-    def apply_forest_cut(df: pd.DataFrame, clf, threshold: float = 0.8) -> pd.DataFrame:
-        df = df.copy()
-        features = ['size', 'width', 'length', 'dist', 'skewness_l', 'kurtosis_l', 'skewness_w', 'kurtosis_w']
-        for i in range(1, 7):
-            dist_col = f'dist{i}'
-            flag_col = f'gamma_like_{i}'
-            cols = ['size', 'width', 'length', dist_col, 'skewness_l', 'kurtosis_l', 'skewness_w', 'kurtosis_w']
-            if not all(c in df.columns for c in cols):
-                continue
-            temp = df[cols].copy()
-            temp.columns = features
-            mask = temp.notna().all(axis=1)
-            proba = np.zeros(len(df))
-            proba[mask] = clf.predict_proba(temp[mask])[:, 1]
-            df[flag_col] = proba > threshold
+    
+    def train_nn_classifier(model_df: pd.DataFrame, exp_df: pd.DataFrame):
+        # TODO
         return df
+    
+    def dump_rf_classifier(self):
+        '''dump trained rf classifier '''
+        # TODO
+        return 0
+
+    def dump_nn_classifier(self):
+        '''dump trained nn classifier '''
+        # TODO
+        return 0
 
     def classify_by_cuts(self, df: pd.DataFrame, cuts=None) -> pd.DataFrame:
+        # TODO load cuts from json
         df = df.copy()
         cuts = cuts or {'width_min': 0.024, 'width_max': 0.068, 'length_max': 0.145}
         for i in range(1, 7):
@@ -154,19 +210,29 @@ class GammaSpectrumReconstructor:
                 (df['length'] < cuts['length_max'] * np.log10(df['size']))
             )
         return df
-
+    
     @staticmethod
-    def apply_good_cut(exp_data: pd.DataFrame) -> pd.DataFrame:
-        df = exp_data.copy()
-        mask = (
-            (df.get('tracking', 1) == 1) &
-            (df.get('good', 1) == 1) &
-            (df.get('edge', 0) == 0) &
-            (df.get('tel_el', 55).between(50, 60)) &
-            (df.get('weather_mark', 6) > 5) &
-            (df.get('star', 0) == 0)
-        )
-        return df[mask]
+    def classify_by_rf(df: pd.DataFrame, clf, threshold: float = 0.8) -> pd.DataFrame:
+        df = df.copy()
+        features = ['size', 'width', 'length', 'dist', 'skewness_l', 'kurtosis_l', 'skewness_w', 'kurtosis_w']
+        for i in range(1, 7):
+            dist_col = f'dist{i}'
+            flag_col = f'gamma_like_{i}'
+            cols = ['size', 'width', 'length', dist_col, 'skewness_l', 'kurtosis_l', 'skewness_w', 'kurtosis_w']
+            if not all(c in df.columns for c in cols):
+                continue
+            temp = df[cols].copy()
+            temp.columns = features
+            mask = temp.notna().all(axis=1)
+            proba = np.zeros(len(df))
+            proba[mask] = clf.predict_proba(temp[mask])[:, 1]
+            df[flag_col] = proba > threshold
+        return df
+    
+    @staticmethod
+    def classify_by_nn(df: pd.DataFrame, clf, threshold: float = 0.8) -> pd.DataFrame:
+        # TODO
+        return df
 
     def fit_energy_size(self, out_dir: str = "plots") -> dict:
         filtered = self.model_data.dropna(subset=['size', 'dist[0]', 'energy'])
@@ -199,35 +265,7 @@ class GammaSpectrumReconstructor:
         self.energy_fit_params = params
         return params
 
-    def reconstruct_energy(self, exp_data: pd.DataFrame) -> pd.DataFrame:
-        if not self.energy_fit_params:
-            raise ValueError("Call fit_energy_size() before reconstruct_energy().")
-        df = exp_data.copy()
-        energies = []
-        for _, row in df.iterrows():
-            E = np.nan
-            for (low, high), p in self.energy_fit_params.items():
-                if low <= row.get('dist1', np.nan) < high:
-                    E = 10 ** (linear_model(np.log10(row['size']), *p))
-                    break
-            energies.append(E)
-        df['reconstructed_energy'] = energies
-        return df
-
-    def reconstruct_energy_for_model_data(self, df_model: pd.DataFrame) -> pd.DataFrame:
-        if not self.energy_fit_params:
-            raise ValueError("Call fit_energy_size() before reconstruct_energy_for_model_data().")
-        df = df_model.copy()
-        energies = []
-        for _, row in df.iterrows():
-            E = np.nan
-            for (low, high), p in self.energy_fit_params.items():
-                if low <= row.get('dist[0]', np.nan) < high:
-                    E = 10 ** (linear_model(np.log10(row['size']), *p))
-                    break
-            energies.append(E)
-        df['reconstructed_energy'] = energies
-        return df
+# PLOTTING ============================================================
 
     def plot_theta2_distribution_with_background_average(self, exp_data: pd.DataFrame, prefix: str = "") -> None:
         bins = np.linspace(0, 1.25, 50)
@@ -256,7 +294,7 @@ class GammaSpectrumReconstructor:
 
         N_off_avg = np.mean(N_off_all, axis=0)
         # Plot ON vs averaged OFF
-        import matplotlib.pyplot as plt
+        #import matplotlib.pyplot as plt
         bw = (bins[1] - bins[0]) * 0.5
         fig = plt.figure(figsize=(8,5))
         plt.bar(bin_centers - bw/2, N_on, width=bw, label='source')
