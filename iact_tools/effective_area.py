@@ -26,7 +26,7 @@ import glob
 Number = Union[int, float]
 PathLike = Union[str, os.PathLike]
 
-DEFAULT_RADIUS_M = 500.0  # meters (feel free to adjust or make configurable)
+DEFAULT_RADIUS_M = 1000.0  # meters (feel free to adjust or make configurable)
 
 
 def _to_energy_array(obj: Union[pd.DataFrame, pd.Series, Iterable[Number], np.ndarray],
@@ -174,7 +174,9 @@ def compute_effective_area(
 
     bin_edges = np.logspace(log_min, log_max, n_bins + 1)
     total_counts, _ = np.histogram(E_all, bins=bin_edges)
+    total_counts = total_counts / 5  # TODO I guess that will fix edist format (scattering=10 but 50 entries per each energy)
     passed_counts, _ = np.histogram(E_pass, bins=bin_edges)
+    #passed_counts = passed_counts
 
     area_m2 = math.pi * float(radius_m) ** 2
 

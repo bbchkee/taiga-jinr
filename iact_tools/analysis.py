@@ -144,33 +144,40 @@ class SpectrumAnalyzer:
 
 # ======= Observation time & physical spectrum =======
 
-def compute_observation_time_minutes(df: pd.DataFrame, portion_col: str = "por", portion_duration_min: float = 3.0) -> float:
+def compute_observation_time_minutes(
+    df: pd.DataFrame,
+    portion_col: str = "por",
+    portion_duration_min: float = 2.0
+) -> float:
     """
-    Estimate observation time (in minutes) from portion IDs.
-    Assumptions:
-      - Within a single observing session, portion IDs (e.g., 'por') are unique and generally increase.
-      - When a new session begins, the portion IDs reset (e.g., go back to 0).
-    We scan the sequence of portion IDs, detect resets where diff < 0, and count unique IDs per segment.
-    Returns total_minutes = (#unique portions across all sessions) * portion_duration_min
+    Оценивает время наблюдений (в минутах) на основе portion-ID.
+    Сначала сортирует DataFrame по времени, чтобы устранить ложные "reset".
     """
+    time_col = "unix_time_ns"
     if portion_col not in df.columns:
         raise KeyError(f"Column '{portion_col}' not found in DataFrame.")
-    por = df[portion_col].to_numpy()
+    if time_col not in df.columns:
+        raise KeyError(f"Column '{time_col}' not найден — без времени сортировка невозможна.")
+
+    # Time sorting
+    # TODO may be I can remove it, seems that simplified way works
+    df_sorted = df.sort_values(time_col).reset_index(drop=True)
+
+    por = df_sorted[portion_col].to_numpy()
     if por.size == 0:
         return 0.0
 
-    # Detect session resets: whenever difference < 0
-    #import numpy as np
+    # Детектируем начала новых сессий как моменты, когда portion-ID падает
     d = np.diff(por.astype(float), prepend=por[0])
     resets = (d < 0).astype(int)
     session_ids = np.cumsum(resets)
 
-    # Count unique portions per session and sum
+    # Считаем количество уникальных порций в каждой сессии
     s = pd.Series(por)
     unique_counts = s.groupby(session_ids).nunique()
     total_portions = int(unique_counts.sum())
-    return total_portions * float(portion_duration_min)
 
+    return total_portions * float(portion_duration_min)
 
 def compute_physical_spectrum(
     exp_df: pd.DataFrame,
@@ -182,7 +189,7 @@ def compute_physical_spectrum(
     """
     Compute a simple differential spectrum:
       dN / (dE * dt * A_eff)
-    - Select ON events with theta2 < theta2_max (no background subtraction here).
+    - Select ON events with theta2 < theta2_max (background substraction below).
     - Bin them using eff_df bin edges (e_low/e_high).
     - Use observation time derived from portion IDs ('por'), 2 minutes per portion.
     - Use effective area per bin from eff_df['eff_area_m2'].
@@ -190,7 +197,7 @@ def compute_physical_spectrum(
       e_low, e_high, e_center, N, dE, T_sec, A_eff_m2, flux, flux_err
     """
     # Observation time
-    T_min = compute_observation_time_minutes(exp_df, portion_col="por", portion_duration_min=3.0)
+    T_min = compute_observation_time_minutes(exp_df, portion_col="por", portion_duration_min=2.0)
     T_sec = T_min * 60.0
 
     # Event selection by theta2
@@ -200,7 +207,8 @@ def compute_physical_spectrum(
         theta2_col = "theta2" if "theta2" in df.columns else None
     if theta2_col is not None and theta2_col in df.columns:
         df = df[df[theta2_col] < theta2_max]
-
+    df = df[df['gamma_like_1'] == 1] # dont forget about this
+    
     # Binning per eff_df edges
     edges = eff_df["e_low"].to_numpy()
     edges = np.append(edges, eff_df["e_high"].to_numpy()[-1])
@@ -243,10 +251,10 @@ def plot_physical_spectrum(
     """
     Plot the differential spectrum vs energy with error bars.
     """
-    # TODO fix hardcoded m2 to mc2 convertion
+    # TODO fix hardcoded m2 to cm2 convertion
     E  = df_spec["e_center"].to_numpy()
-    F  = df_spec["flux"].to_numpy() / 10**5 # from m2 to cm2 
-    dF = df_spec["flux_err"].to_numpy() / 10**5 # from m2 to cm2
+    F  = df_spec["flux"].to_numpy() / 10**4 # from m2 to cm2 
+    dF = df_spec["flux_err"].to_numpy() / 10**4 # from m2 to cm2
 
     # Scaling F(E) -> F(E)*E^p и ошибок
     if scale_power is not None and float(scale_power) != 0.0:
@@ -263,9 +271,11 @@ def plot_physical_spectrum(
     # if Y is log show only positive
     mask = ~np.isnan(F_plot) & (F_plot > 0 if logy else np.isfinite(F_plot))
     plt.errorbar(E[mask], F_plot[mask], yerr=dF_plot[mask], fmt="o", capsize=2)
- 
+    
     plt.xlabel("Энергия, ТэВ")
     plt.ylabel(y_label)
+    # CARE HERE about xlims, it needs to be set from main config
+    plt.xlim(1,200)
     if (E > 0).any():
         plt.xscale("log")
     if logy and (F_plot[mask] > 0).any():

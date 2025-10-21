@@ -14,7 +14,7 @@ from .data_loading import GammaDataLoader
 from .models import linear_model, square_model, calculate_theta2_classic
 from .reconstruction import GammaSpectrumReconstructor
 from .analysis import SpectrumAnalyzer
-from .regressor import GammaShowerRegressor
+from .regressor import GammaNNRegressor
 from .utils import calc_seconds
 
 __all__ = [
@@ -24,7 +24,7 @@ __all__ = [
     "calculate_theta2_classic",
     "GammaSpectrumReconstructor",
     "SpectrumAnalyzer",
-    "GammaShowerRegressor",
+    "GammaNNRegressor",
     "calc_seconds",
 ]
 

@@ -4,6 +4,7 @@ import numpy as np
 import pandas as pd
 from tqdm import tqdm
 import matplotlib.pyplot as plt
+from typing import Optional, Iterable, Set, List
 
 from .utils import COMMON_RANGES
 
@@ -15,10 +16,24 @@ class GammaDataLoader:
         self.model_data = None
         self.exp_data = None
 
-    def load_model_data(self, pattern: str = "*.csv") -> pd.DataFrame:
-        files = glob.glob(os.path.join(self.model_path, pattern))
-        frames = [pd.read_csv(f) for f in tqdm(files, desc="Loading model data")]
-        self.model_data = pd.concat(frames, ignore_index=True) if frames else pd.DataFrame()
+    def load_model_data(self, path: Optional[str] = None, pattern: str = "*.csv") -> pd.DataFrame:
+        """
+        Грузит CSV из `path` (если передан) или из self.model_path.
+        Если данные уже были загружены ранее, новые доклеиваются (concat) к self.model_data.
+        """
+        base_path = path or self.model_path
+        if not base_path:
+            raise ValueError("Не задан путь: передайте `path` или установите `self.model_path`.")
+
+        files = glob.glob(os.path.join(base_path, pattern))
+        frames = [pd.read_csv(f) for f in tqdm(files, desc="Loading model data")] if files else []
+
+        new_df = pd.concat(frames, ignore_index=True) if frames else pd.DataFrame()
+        if self.model_data is None or self.model_data.empty:
+            self.model_data = new_df
+        else:
+            self.model_data = pd.concat([self.model_data, new_df], ignore_index=True)
+
         return self.model_data
 
     def load_experiment_data(self, file_pattern: str = "*.csv") -> pd.DataFrame:

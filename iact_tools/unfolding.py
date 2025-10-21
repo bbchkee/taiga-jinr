@@ -180,74 +180,137 @@ def save_lcurve_plot(df_lc: pd.DataFrame, out_png: str = "plots/lcurve.png") -> 
     os.makedirs(os.path.dirname(out_png) or ".", exist_ok=True)
     fig.tight_layout(); fig.savefig(out_png, dpi=150); plt.close(fig)
 
-def save_response_matrix_plot(R: np.ndarray, reco_edges: np.ndarray, true_edges: np.ndarray, out_png: str = "plots/response_matrix.png") -> None:
-    #import matplotlib.pyplot as plt, os
-    fig = plt.figure(figsize=(6,5))
-    plt.imshow(R, origin="lower", aspect="auto")
-    plt.xlabel("True-energy bin index"); plt.ylabel("Reco-energy bin index")
+def save_response_matrix_plot(
+    R: np.ndarray,
+    reco_edges: np.ndarray,   # края бинов по восстановленной энергии (TeV), shape = (Ny+1,)
+    true_edges: np.ndarray,   # края бинов по истинной энергии (TeV),      shape = (Nx+1,)
+    out_png: str = "plots/response_matrix.png",
+    normalize: str = "none",  # 'none' | 'row' | 'col'
+    cmap: str = "viridis"
+) -> None:
+    """
+    Рисует матрицу отклика в координатах энергии (TeV).
+    R.shape должен быть (Ny, Nx) == (len(reco_edges)-1, len(true_edges)-1).
+    normalize:
+      'row' — нормировка строк (условн. P(true|reco)),
+      'col' — нормировка столбцов (условн. P(reco|true)),
+      'none' — без нормировки (счётчики).
+    """
+    import os
+    import numpy as np
+    import matplotlib.pyplot as plt
+
+    R = np.asarray(R, dtype=float)
+    Ny, Nx = R.shape
+    assert Ny == len(reco_edges) - 1 and Nx == len(true_edges) - 1, \
+        f"Shape mismatch: R={R.shape}, reco_edges={len(reco_edges)}, true_edges={len(true_edges)}"
+
+    if normalize == "row":
+        denom = np.clip(R.sum(axis=1, keepdims=True), 1e-12, None)
+        Rplot = R / denom
+        cbar_label = "Probability (row-norm)"
+    elif normalize == "col":
+        denom = np.clip(R.sum(axis=0, keepdims=True), 1e-12, None)
+        Rplot = R / denom
+        cbar_label = "Probability (col-norm)"
+    else:
+        Rplot = R
+        cbar_label = "Counts"
+
+    fig, ax = plt.subplots(figsize=(6.6, 5.2))
+    # ВАЖНО: именно pcolormesh с реальными краями бинов
+    mesh = ax.pcolormesh(true_edges, reco_edges, Rplot, shading="auto", cmap=cmap)
+
+    ax.set_xscale("log")
+    ax.set_yscale("log")
+    ax.set_xlabel("True energy [TeV]")
+    ax.set_ylabel("Reconstructed energy [TeV]")
+
+    # диагональ y=x для контроля
+    lo = max(true_edges[0], reco_edges[0])
+    hi = min(true_edges[-1], reco_edges[-1])
+    ax.plot([lo, hi], [lo, hi], "--", lw=1, color="w", alpha=0.7)
+
+    cb = fig.colorbar(mesh, ax=ax)
+    cb.set_label(cbar_label)
+
+    ax.grid(True, which="both", ls=":", alpha=0.45)
     os.makedirs(os.path.dirname(out_png) or ".", exist_ok=True)
-    fig.tight_layout(); fig.savefig(out_png, dpi=150); plt.close(fig)
+    fig.tight_layout()
+    fig.savefig(out_png, dpi=150)
+    plt.close(fig)
+
+
 
 
 def run_unfolding_pipeline(
     exp_df: pd.DataFrame,
     model_df: pd.DataFrame,
     eff_df: pd.DataFrame,
-    tau: float = 1.0,
+    tau: float | None = 1.0,  # допускаем None для авто-τ
     reco_energy_col: str = "reconstructed_energy",
     true_energy_col: str = "energy",
     theta2_col: str = "theta2_1",
     theta2_max: float = 0.05,
 ) -> Tuple[pd.DataFrame, np.ndarray, np.ndarray]:
-    """
-    High-level helper:
-      - builds response matrix from model_df (using eff_df true-bin edges),
-      - histograms measured counts M from exp_df (reco energies, theta2 cut),
-      - unfolds with Tikhonov,
-      - converts to flux with A_eff and exposure (from 'por' 2-min portions).
-    Returns: (flux_df, R, M)
-    """
-    # Use eff_df true-bin edges for both true & reco (simplify)
+
+    # 1) биннинг из eff_df
     true_edges = eff_df["e_low"].to_numpy()
     true_edges = np.append(true_edges, eff_df["e_high"].to_numpy()[-1])
     reco_edges = true_edges
 
-    # Build response
-    R, _, _ = build_response_matrix(model_df, true_energy_col=true_energy_col,
-                                    reco_energy_col=reco_energy_col,
-                                    bin_edges_true=true_edges, bin_edges_reco=reco_edges)
+    # 2) матрица отклика
+    R, _, _ = build_response_matrix(
+        model_df,
+        true_energy_col=true_energy_col,
+        reco_energy_col=reco_energy_col,
+        bin_edges_true=true_edges,
+        bin_edges_reco=reco_edges,
+    )
 
-    # Measured counts in reco bins (theta2 selection)
+    # 2a) сохранить теплокарту ВСЕГДА и в однотипное место/имя
+    plots_dir = "plots"
+    os.makedirs(plots_dir, exist_ok=True)
+    resp_png = os.path.join(plots_dir, "response_matrix.png")
+    try:
+        save_response_matrix_plot(R, reco_edges, true_edges, out_png=resp_png)
+        print(f"[Unfolding] Response matrix saved to: {resp_png}")
+    except Exception as e:
+        print(f"[Unfolding][WARN] Failed to save response matrix: {e}")
+
+    # 3) счётчик M из reco-энергий с theta2-срезом
     df = exp_df.copy()
     if theta2_col in df.columns:
         df = df[df[theta2_col] < theta2_max]
     E_reco = df[reco_energy_col].dropna().to_numpy()
     M, _ = np.histogram(E_reco, bins=reco_edges)
 
-    # Exposure time from 'por' (2-min portions)
+    # 4) экспозиция из 'por' (по 2 минуты)
     from .analysis import compute_observation_time_minutes
     T_min = compute_observation_time_minutes(exp_df, portion_col="por", portion_duration_min=2.0)
     T_sec = T_min * 60.0
 
-    # Auto-tau (L-curve) если запрошено
+    # 5) авто-τ по L-кривой (если tau is None)
     if tau is None:
-        # сетка подбора можно варьировать при желании
         tau_grid = np.logspace(-4, 2, 25)
         tau_chosen, df_lc = select_tau_lcurve(M, R, tau_grid)
-        # сохранить график L-кривой (полезно для дебага)
+        lcurve_png = os.path.join(plots_dir, "lcurve.png")
         try:
-            save_lcurve_plot(df_lc, out_png="plots/lcurve.png")
-        except Exception:
-            pass
-        print(f"[Unfolding] Auto tau selected by L-curve: {tau_chosen:.3g}")
+            save_lcurve_plot(df_lc, out_png=lcurve_png)
+            print(f"[Unfolding] L-curve saved to: {lcurve_png}")
+        except Exception as e:
+            print(f"[Unfolding][WARN] Failed to save L-curve: {e}")
         tau = float(tau_chosen)
+        print(f"[Unfolding] Auto-selected tau = {tau:.6g}")
+    else:
+        # даже при фиксированном τ напечатаем его
+        print(f"[Unfolding] Using fixed tau = {tau:.6g}")
 
-    # Unfold
+    # 6) анфолдинг
     N_true = tikhonov_unfold(M, R, tau=tau, weights=None, non_negative=True)
 
-    # Effective area (align bins with eff_df)
+    # 7) в поток
     A = eff_df["eff_area_m2"].to_numpy()
-
-    # Convert to flux
     flux_df = unfold_to_flux(N_true, true_edges, A, T_sec)
     return flux_df, R, M
+
